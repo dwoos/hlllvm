@@ -1,0 +1,11 @@
+[package]
+name = "hlllvm"
+version = "0.1.0"
+authors = ["Doug Woos <doug.woos@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+llvm-sys = "80"
+
+[dev-dependencies]
+tempfile = "3.1"
