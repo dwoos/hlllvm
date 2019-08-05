@@ -4,11 +4,15 @@ use llvm_sys::core::LLVMAppendBasicBlock;
 use llvm_sys::core::LLVMArrayType;
 use llvm_sys::core::LLVMBuildAdd;
 use llvm_sys::core::LLVMBuildAlloca;
+use llvm_sys::core::LLVMBuildAnd;
 use llvm_sys::core::LLVMBuildBr;
 use llvm_sys::core::LLVMBuildCall;
 use llvm_sys::core::LLVMBuildCondBr;
+use llvm_sys::core::LLVMBuildICmp;
 use llvm_sys::core::LLVMBuildLoad;
 use llvm_sys::core::LLVMBuildMul;
+use llvm_sys::core::LLVMBuildNot;
+use llvm_sys::core::LLVMBuildOr;
 use llvm_sys::core::LLVMBuildPointerCast;
 use llvm_sys::core::LLVMBuildRet;
 use llvm_sys::core::LLVMBuildSDiv;
@@ -18,10 +22,12 @@ use llvm_sys::core::LLVMConstInt;
 use llvm_sys::core::LLVMConstString;
 use llvm_sys::core::LLVMContextCreate;
 use llvm_sys::core::LLVMContextDispose;
+use llvm_sys::core::LLVMCountParams;
 use llvm_sys::core::LLVMCreateBuilderInContext;
 use llvm_sys::core::LLVMDisposeBuilder;
 use llvm_sys::core::LLVMDisposeModule;
 use llvm_sys::core::LLVMFunctionType;
+use llvm_sys::core::LLVMGetParam;
 use llvm_sys::core::LLVMIsMultithreaded;
 use llvm_sys::core::LLVMModuleCreateWithNameInContext;
 use llvm_sys::core::LLVMPositionBuilderAtEnd;
@@ -163,6 +169,8 @@ impl Module {
         })
     }
 
+    // functions
+
     pub fn declare_function(
         &mut self,
         name: &str,
@@ -197,10 +205,20 @@ impl Module {
         self.block(block)
     }
 
+    pub fn param(&mut self, f: LLVMFunction, n: usize) -> LLVMValue {
+        let f = self.llvm_function(f);
+        let n_params = unsafe { LLVMCountParams(f) as usize };
+        if n >= n_params {
+            panic!("No parameter at index {}", n);
+        }
+        let param = unsafe { LLVMGetParam(f, n as u32) };
+        self.value(param)
+    }
+
     // instructions
 
-    pub fn call(&mut self, bb: LLVMBasicBlock, f: LLVMFunction, args: &[LLVMValue]) {
-        self.call_named(bb, f, args, LLVMName::Anonymous);
+    pub fn call(&mut self, bb: LLVMBasicBlock, f: LLVMFunction, args: &[LLVMValue]) -> LLVMValue {
+        self.call_named(bb, f, args, LLVMName::Anonymous)
     }
 
     pub fn call_named(
@@ -209,7 +227,7 @@ impl Module {
         f: LLVMFunction,
         args: &[LLVMValue],
         name: LLVMName,
-    ) {
+    ) -> LLVMValue {
         let f = self.llvm_function(f);
         let mut llvm_args = Vec::new();
         for arg in args.iter() {
@@ -225,7 +243,7 @@ impl Module {
                 self.string_ptr_from_name(name),
             )
         };
-        self.value(llvm_value);
+        self.value(llvm_value)
     }
 
     pub fn br(&mut self, bb: LLVMBasicBlock, next: LLVMBasicBlock) {
@@ -285,13 +303,20 @@ impl Module {
         }
     }
 
-    pub fn add(&mut self, bb: LLVMBasicBlock, value1: LLVMValue, value2: LLVMValue) -> LLVMValue {
-        self.add_named(bb, value1, value2, LLVMName::Anonymous)
-    }
-
-    pub fn add_named(
+    pub fn ibinop(
         &mut self,
         bb: LLVMBasicBlock,
+        binop: LLVMIBinop,
+        value1: LLVMValue,
+        value2: LLVMValue,
+    ) -> LLVMValue {
+        self.ibinop_named(bb, binop, value1, value2, LLVMName::Anonymous)
+    }
+
+    pub fn ibinop_named(
+        &mut self,
+        bb: LLVMBasicBlock,
+        binop: LLVMIBinop,
         value1: LLVMValue,
         value2: LLVMValue,
         name: LLVMName,
@@ -300,64 +325,39 @@ impl Module {
         let value1 = self.llvm_value(value1);
         let value2 = self.llvm_value(value2);
         let name = self.string_ptr_from_name(name);
-        let llvm_value = unsafe { LLVMBuildAdd(builder.builder, value1, value2, name) };
+        let llvm_value = unsafe {
+            use llvm_sys::LLVMIntPredicate::*;
+            use LLVMIBinop::*;
+            match binop {
+                // arith
+                Add => LLVMBuildAdd(builder.builder, value1, value2, name),
+                Sub => LLVMBuildSub(builder.builder, value1, value2, name),
+                Mul => LLVMBuildMul(builder.builder, value1, value2, name),
+                SDiv => LLVMBuildSDiv(builder.builder, value1, value2, name),
+                // logic
+                And => LLVMBuildAnd(builder.builder, value1, value2, name),
+                Or => LLVMBuildOr(builder.builder, value1, value2, name),
+                // cmp
+                Eq => LLVMBuildICmp(builder.builder, LLVMIntEQ, value1, value2, name),
+                Neq => LLVMBuildICmp(builder.builder, LLVMIntNE, value1, value2, name),
+                SLt => LLVMBuildICmp(builder.builder, LLVMIntSLT, value1, value2, name),
+                SLe => LLVMBuildICmp(builder.builder, LLVMIntSLE, value1, value2, name),
+                SGt => LLVMBuildICmp(builder.builder, LLVMIntSGT, value1, value2, name),
+                SGe => LLVMBuildICmp(builder.builder, LLVMIntSGE, value1, value2, name),
+            }
+        };
         self.value(llvm_value)
     }
 
-    pub fn sub(&mut self, bb: LLVMBasicBlock, value1: LLVMValue, value2: LLVMValue) -> LLVMValue {
-        self.sub_named(bb, value1, value2, LLVMName::Anonymous)
+    pub fn not(&mut self, bb: LLVMBasicBlock, value: LLVMValue) -> LLVMValue {
+        self.not_named(bb, value, LLVMName::Anonymous)
     }
 
-    pub fn sub_named(
-        &mut self,
-        bb: LLVMBasicBlock,
-        value1: LLVMValue,
-        value2: LLVMValue,
-        name: LLVMName,
-    ) -> LLVMValue {
+    pub fn not_named(&mut self, bb: LLVMBasicBlock, value: LLVMValue, name: LLVMName) -> LLVMValue {
         let builder = self.builder(bb);
-        let value1 = self.llvm_value(value1);
-        let value2 = self.llvm_value(value2);
+        let value = self.llvm_value(value);
         let name = self.string_ptr_from_name(name);
-        let llvm_value = unsafe { LLVMBuildSub(builder.builder, value1, value2, name) };
-        self.value(llvm_value)
-    }
-
-    pub fn mul(&mut self, bb: LLVMBasicBlock, value1: LLVMValue, value2: LLVMValue) -> LLVMValue {
-        self.mul_named(bb, value1, value2, LLVMName::Anonymous)
-    }
-
-    pub fn mul_named(
-        &mut self,
-        bb: LLVMBasicBlock,
-        value1: LLVMValue,
-        value2: LLVMValue,
-        name: LLVMName,
-    ) -> LLVMValue {
-        let builder = self.builder(bb);
-        let value1 = self.llvm_value(value1);
-        let value2 = self.llvm_value(value2);
-        let name = self.string_ptr_from_name(name);
-        let llvm_value = unsafe { LLVMBuildMul(builder.builder, value1, value2, name) };
-        self.value(llvm_value)
-    }
-
-    pub fn sdiv(&mut self, bb: LLVMBasicBlock, value1: LLVMValue, value2: LLVMValue) -> LLVMValue {
-        self.sdiv_named(bb, value1, value2, LLVMName::Anonymous)
-    }
-
-    pub fn sdiv_named(
-        &mut self,
-        bb: LLVMBasicBlock,
-        value1: LLVMValue,
-        value2: LLVMValue,
-        name: LLVMName,
-    ) -> LLVMValue {
-        let builder = self.builder(bb);
-        let value1 = self.llvm_value(value1);
-        let value2 = self.llvm_value(value2);
-        let name = self.string_ptr_from_name(name);
-        let llvm_value = unsafe { LLVMBuildSDiv(builder.builder, value1, value2, name) };
+        let llvm_value = unsafe { LLVMBuildNot(builder.builder, value, name) };
         self.value(llvm_value)
     }
 
@@ -460,7 +460,7 @@ pub enum LLVMName<'a> {
     Name(&'a str),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum LLVMType {
     Int1,
     Int8,
@@ -468,17 +468,17 @@ pub enum LLVMType {
     Pointer(Rc<LLVMType>),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct LLVMBasicBlock {
     id: usize,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct LLVMValue {
     id: usize,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct LLVMFunction {
     id: usize,
 }
@@ -500,6 +500,22 @@ impl LLVMType {
             },
         })
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum LLVMIBinop {
+    Add,
+    Sub,
+    Mul,
+    SDiv,
+    And,
+    Or,
+    Eq,
+    Neq,
+    SLt,
+    SLe,
+    SGt,
+    SGe,
 }
 
 #[cfg(test)]
@@ -540,7 +556,6 @@ mod tests {
     fn test_cross_module_panics() {
         let mut module1 = Module::new("mod");
         let f = module1.declare_function("f", LLVMType::Int32, &[], false);
-        let bb1 = module1.add_block(f);
         let bb2 = module1.add_block(f);
 
         let mut module2 = Module::new("mod2");
