@@ -5,7 +5,7 @@ authors = ["Doug Woos <doug.woos@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-llvm-sys = "80"
+llvm-sys = "110"
 
 [dev-dependencies]
 tempfile = "3.1"
